@@ -12,30 +12,29 @@ jobs:
     - name: Descargar Código
       uses: actions/checkout@v4
 
-    - name: Instalar Qt 6
-      uses: jurplel/install-qt-action@v4
-      with:
-        version: '6.6.0'
-        host: 'windows'
-        target: 'desktop'
-        arch: 'win64_msvc2019_64'
-        modules: 'qtsql'
-        aqtsource: 'git+https://github.com'
-
     - name: Configurar MSVC (Compilador de Windows)
       uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Instalar Qt6 mediante VCPKG
+      run: |
+        vcpkg install qtbase[sql,psql]:x64-windows --triplet=x64-windows
 
     - name: Compilar Proyecto con CMake
       run: |
         mkdir build
         cd build
-        cmake -DCMAKE_BUILD_TYPE=Release ..
+        cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake ..
         cmake --build . --config Release
 
-    - name: Empaquetar dependencias (Windeployqt)
+    - name: Buscar herramientas de Qt y Empaquetar (Windeployqt)
+      shell: pwsh
       run: |
+        # Localizar el windeployqt instalado por vcpkg de manera dinámica
+        $windeployqt = (Get-ChildItem -Path C:\vcpkg\packages\qtbase_* -Filter windeployqt.exe -Recurse).FullName | Select-Object -First 1
+        Write-Host "Usando windeployqt desde: $windeployqt"
+        
         cd build\Release
-        windeployqt --qmldir . LoginElecciones.exe
+        & $windeployqt --qmldir . LoginElecciones.exe
 
     - name: Subir ejecutable al Release de GitHub
       uses: svenstaro/upload-release-action@v2
