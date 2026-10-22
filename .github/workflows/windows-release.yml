@@ -20,7 +20,7 @@ jobs:
         target: 'desktop'
         arch: 'win64_msvc2019_64'
         modules: 'qtsql'
-        aqtsource: 'https://github.com'
+        aqtsource: 'git+https://github.com'
 
     - name: Configurar MSVC (Compilador de Windows)
       uses: ilammy/msvc-dev-cmd@v1
