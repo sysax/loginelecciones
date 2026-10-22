@@ -17,7 +17,7 @@ jobs:
 
     - name: Instalar Qt6 mediante VCPKG
       run: |
-        vcpkg install qtbase[sql,psql]:x64-windows --triplet=x64-windows
+        vcpkg install qtbase[sql,postgresql]:x64-windows --triplet=x64-windows
 
     - name: Compilar Proyecto con CMake
       run: |
