@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  mi_base_datos:
+    image: postgres:15-alpine
+    container_name: postgres_nueva_app
+    environment:
+      POSTGRES_USER: mi_usuario
+      POSTGRES_PASSWORD: mi_password_secreto
+      POSTGRES_DB: mi_base_datos
+    ports:
+      - "5433:5432" # Usa el puerto 5433 porque Supabase ya usa el 5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
+
