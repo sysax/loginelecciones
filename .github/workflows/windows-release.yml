@@ -13,13 +13,14 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Instalar Qt 6
-      uses: jurplel/install-qt-action@v3
+      uses: jurplel/install-qt-action@v4
       with:
         version: '6.6.0'
         host: 'windows'
         target: 'desktop'
         arch: 'win64_msvc2019_64'
         modules: 'qtsql'
+        aqtsource: 'https://github.com'
 
     - name: Configurar MSVC (Compilador de Windows)
       uses: ilammy/msvc-dev-cmd@v1
