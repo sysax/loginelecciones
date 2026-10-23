@@ -42,12 +42,19 @@ jobs:
 
       - name: Instalar dependencias Qt 6 y PostgreSQL
         shell: pwsh
+        working-directory: ${{ github.workspace }}
         run: |
           $ErrorActionPreference = 'Stop'
-          # qtbase[sql-psql] habilita el controlador PostgreSQL de Qt SQL.
-          # Añade qtdeclarative si el proyecto usa Qt Quick/QML y no lo declara ya en su manifiesto.
-          & "$env:VCPKG_ROOT\vcpkg.exe" install "qtbase[gui,sql,sql-psql,windeployqt]:x64-windows"
-          if ($LASTEXITCODE -ne 0) { throw "Falló la instalación de dependencias vcpkg (código $LASTEXITCODE)." }
+
+          if (-not (Test-Path "vcpkg.json")) {
+           throw "No se encuentra vcpkg.json en la raíz del repositorio."
+          }
+
+          & C:\vcpkg\vcpkg.exe install --triplet x64-windows
+
+          if ($LASTEXITCODE -ne 0) {
+           throw "Falló la instalación de dependencias vcpkg."
+          }
 
       - name: Configurar CMake
         shell: pwsh
