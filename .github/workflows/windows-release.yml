@@ -61,8 +61,18 @@ jobs:
           if (-not (Test-Path "$dist\sqldrivers\qsqlpsql.dll")) {
             throw 'windeployqt no copió qsqlpsql.dll'
           }
+
+          # windeployqt NO copia libpq.dll (no es una DLL de Qt):
+          # copiarla manualmente junto con sus dependencias (openssl, etc.)
           if (-not (Test-Path "$dist\libpq.dll")) {
-            Copy-Item "$env:Qt6_DIR\bin\libpq.dll" $dist\
+            $qtBin = Split-Path (Get-Command windeployqt).Source
+            Write-Host "Carpeta bin de Qt: $qtBin"
+            Copy-Item "$qtBin\libpq.dll" $dist\ -Force
+            Get-ChildItem "$qtBin\libssl-*.dll","$qtBin\libcrypto-*.dll","$qtBin\libintl-*.dll" -ErrorAction SilentlyContinue |
+              Copy-Item -Destination $dist -Force
+          }
+          if (-not (Test-Path "$dist\libpq.dll")) {
+            throw 'No se pudo copiar libpq.dll desde la carpeta bin de Qt.'
           }
 
           Write-Host '--- Contenido de dist ---'
