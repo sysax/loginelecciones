@@ -31,7 +31,7 @@ jobs:
         with:
           arch: x64
 
-      # Qt oficial (incluye el driver QPSQL y libpq.dll)
+      # Qt oficial (incluye el plugin QPSQL; libpq.dll se obtiene aparte)
       # Mucho más rápido que compilar Qt con vcpkg (~5 min vs ~1 hora)
       - name: Instalar Qt 6
         uses: jurplel/install-qt-action@v4
