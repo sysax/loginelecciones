@@ -1,64 +1,210 @@
-	name: Compilar para Windows
-	on:
+name: Compilar y publicar LoginElecciones para Windows
+
+on:
   release:
     types: [created]
-	permissions:
-	  contents: write
-	jobs:
-	  build-windows:
-	    runs-on: windows-latest
-    steps:
-	    - name: Descargar Código
-	      uses: actions/checkout@v4
-	
-	    - name: Configurar MSVC (Compilador de Windows)
-	      uses: ilammy/msvc-dev-cmd@v1
-	    - name: Instalar Qt6 mediante VCPKG
-	      shell: bash
-	      run: |
-	        # CORRECCION: el feature de vcpkg se llama "postgres", NO "postgresql".
-	        # Usar "postgresql" provocaba: error while loading vcpkg.json: invalid feature
-	        vcpkg install "qtbase[core,sql,postgres]:x64-windows" --triplet x64-windows
-	    - name: Compilar Proyecto con CMake
-	      shell: bash
-	      run: |
-	        mkdir build
-	        cd build
-	        cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake ..
-	        cmake --build . --config Release
-    - name: Copiar ejecutable a la raiz del workspace
-	      shell: bash
-	      # Con Ninja (el generador que usa msvc-dev-cmd), el exe sale en "build/"
-	      # y no en "build/Release/". Este paso normaliza la ruta para evitar
-	      # el error "no such file or directory" al subir el asset.
-	      run: |
-	        if [ -f build/Release/LoginElecciones.exe ]; then
-	          cp build/Release/LoginElecciones.exe LoginElecciones.exe
-	        elif [ -f build/LoginElecciones.exe ]; then
-	          cp build/LoginElecciones.exe LoginElecciones.exe
-	        else
-	          echo "::error::No se encontro LoginElecciones.exe despues de compilar"
-	          find . -name "*.exe" || true
-	          exit 1
-	        fi
-	    - name: Buscar herramientas de Qt y Empaquetar (Windeployqt)
-	      shell: pwsh
-	      run: |
-	        # Localizar el windeployqt instalado por vcpkg de manera dinamica
-	        $windeployqt = (Get-ChildItem -Path C:\vcpkg\packages\qtbase_* -Filter windeployqt.exe -Recurse -ErrorAction SilentlyContinue).FullName | Select-               Object         -       First 1
-	        if (-not $windeployqt) {
-	          Write-Host "::error::No se encontro windeployqt.exe en C:\vcpkg\packages"
-	          exit 1
-	        }
 
-   	        Write-Host "Usando windeployqt desde: $windeployqt"
-	        & $windeployqt --release --compiler-runtime LoginElecciones.exe
-	        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-	    - name: Subir ejecutable al Release de GitHub
-      uses: svenstaro/upload-release-action@v2
-	      with:
-	        repo_token: ${{ secrets.GITHUB_TOKEN }}
-	        file: LoginElecciones.exe
-	        asset_name: LoginElecciones-Windows.exe
-	        tag: ${{ github.event.release.tag_name }}
-	        overwrite: true
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    env:
+      VCPKG_ROOT: C:\vcpkg
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+      APP_EXE: LoginElecciones.exe
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Configurar MSVC x64
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configurar Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Comprobar herramientas
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path "$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake")) {
+            throw "No se encontró el toolchain de vcpkg en $env:VCPKG_ROOT. Verifica la imagen del runner o instala vcpkg explícitamente."
+          }
+          cmake --version
+          ninja --version
+          cl 2>&1 | Select-Object -First 3
+
+      - name: Instalar dependencias Qt 6 y PostgreSQL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # qtbase[sql-psql] habilita el controlador PostgreSQL de Qt SQL.
+          # Añade qtdeclarative si el proyecto usa Qt Quick/QML y no lo declara ya en su manifiesto.
+          & "$env:VCPKG_ROOT\vcpkg.exe" install "qtbase[gui,sql,sql-psql,windeployqt]:x64-windows"
+          if ($LASTEXITCODE -ne 0) { throw "Falló la instalación de dependencias vcpkg (código $LASTEXITCODE)." }
+
+      - name: Configurar CMake
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows
+          if ($LASTEXITCODE -ne 0) { throw "Falló la configuración de CMake (código $LASTEXITCODE)." }
+
+      - name: Compilar
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --build build --parallel
+          if ($LASTEXITCODE -ne 0) { throw "Falló la compilación (código $LASTEXITCODE)." }
+
+      - name: Localizar ejecutable y preparar carpeta de distribución
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $matches = @(Get-ChildItem -Path build -Filter $env:APP_EXE -File -Recurse)
+          if ($matches.Count -ne 1) {
+            Get-ChildItem -Path build -Filter '*.exe' -File -Recurse | Select-Object -ExpandProperty FullName
+            throw "Se esperaba exactamente un $env:APP_EXE dentro de build; encontrados: $($matches.Count). Ajusta APP_EXE o la configuración de CMake."
+          }
+
+          $deploy = Join-Path $env:GITHUB_WORKSPACE 'dist\LoginElecciones'
+          New-Item -ItemType Directory -Path $deploy -Force | Out-Null
+          Copy-Item $matches[0].FullName -Destination $deploy
+          "DEPLOY_DIR=$deploy" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "APP_BINARY=$(Join-Path $deploy $env:APP_EXE)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Desplegar Qt y el controlador SQL PostgreSQL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installed = Join-Path $env:VCPKG_ROOT 'installed\x64-windows'
+          $windeployMatches = @(Get-ChildItem -Path $installed -Filter 'windeployqt.exe' -File -Recurse -ErrorAction SilentlyContinue)
+          if ($windeployMatches.Count -eq 0) {
+            throw "No se encontró windeployqt.exe en $installed. Confirma que el feature windeployqt está disponible en la versión de vcpkg usada."
+          }
+          $windeployqt = $windeployMatches[0].FullName
+          Write-Host "Usando $windeployqt"
+
+          # Si hay fuentes QML, permite que windeployqt detecte los módulos Qt Quick utilizados.
+          $qmlFiles = @(Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter '*.qml' -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '[\\/]build[\\/]|[\\/]vcpkg_installed[\\/]' })
+          if ($qmlFiles.Count -gt 0) {
+            & $windeployqt --release --dir $env:DEPLOY_DIR --qmldir $env:GITHUB_WORKSPACE $env:APP_BINARY
+          } else {
+            & $windeployqt --release --dir $env:DEPLOY_DIR $env:APP_BINARY
+          }
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt falló (código $LASTEXITCODE)." }
+
+          # windeployqt no garantiza desplegar dependencias de terceros ni el driver SQL.
+          $sqlPlugin = Get-ChildItem -Path $installed -Filter 'qsqlpsql.dll' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $sqlPlugin) {
+            throw "No se encontró qsqlpsql.dll. Verifica que Qt se compiló con el feature sql-psql."
+          }
+          $sqlDir = Join-Path $env:DEPLOY_DIR 'sqldrivers'
+          New-Item -ItemType Directory -Path $sqlDir -Force | Out-Null
+          Copy-Item $sqlPlugin.FullName -Destination $sqlDir -Force
+
+          # Copia DLLs de runtime de vcpkg para cubrir dependencias transitivas de libpq.
+          # Puede incluir DLLs adicionales; conviene reducir esta lista tras inspeccionar el árbol real.
+          $vcpkgBin = Join-Path $installed 'bin'
+          if (Test-Path $vcpkgBin) {
+            Get-ChildItem -Path $vcpkgBin -Filter '*.dll' -File -ErrorAction SilentlyContinue |
+              Copy-Item -Destination $env:DEPLOY_DIR -Force
+          }
+
+          if (-not (Test-Path (Join-Path $env:DEPLOY_DIR 'platforms\qwindows.dll'))) {
+            throw "Falta platforms\qwindows.dll en la carpeta de distribución."
+          }
+          if (-not (Test-Path (Join-Path $env:DEPLOY_DIR 'sqldrivers\qsqlpsql.dll'))) {
+            throw "Falta sqldrivers\qsqlpsql.dll en la carpeta de distribución."
+          }
+
+      - name: Crear ZIP portátil
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:GITHUB_WORKSPACE 'dist\LoginElecciones-Windows.zip'
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path (Join-Path $env:DEPLOY_DIR '*') -DestinationPath $zip -CompressionLevel Optimal
+          if (-not (Test-Path $zip)) { throw 'No se generó el ZIP portátil.' }
+
+      - name: Instalar Inno Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install innosetup --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "No se pudo instalar Inno Setup (código $LASTEXITCODE)." }
+
+      - name: Crear instalador de Windows
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $isccCandidates = @(
+            "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw 'No se encontró ISCC.exe después de instalar Inno Setup.' }
+
+          $tag = if ([string]::IsNullOrWhiteSpace($env:RELEASE_TAG)) { '0.0.0' } else { $env:RELEASE_TAG.TrimStart('v') }
+          if ($tag -notmatch '^\d+(\.\d+){0,3}([.-][0-9A-Za-z.-]+)?$') { $tag = '0.0.0' }
+          $deploy = $env:DEPLOY_DIR
+          $output = Join-Path $env:GITHUB_WORKSPACE 'dist\installer'
+          New-Item -ItemType Directory -Path (Join-Path $env:GITHUB_WORKSPACE 'dist\installer') -Force | Out-Null
+
+          $iss = @"
+          #define MyAppName "LoginElecciones"
+          #define MyAppVersion "$tag"
+          #define MyAppExeName "LoginElecciones.exe"
+          [Setup]
+          AppId={{B36A1C7E-1F26-4E0E-9E61-2A97B53C6F11}
+          AppName={#MyAppName}
+          AppVersion={#MyAppVersion}
+          DefaultDirName={autopf}\LoginElecciones
+          DefaultGroupName=LoginElecciones
+          OutputDir="$output"
+          OutputBaseFilename=LoginElecciones-Windows-Setup
+          Compression=lzma2
+          SolidCompression=yes
+          WizardStyle=modern
+          ArchitecturesInstallIn64BitMode=x64
+          UninstallDisplayIcon={app}\{#MyAppExeName}
+          [Languages]
+          Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
+          [Tasks]
+          Name: "desktopicon"; Description: "Crear un acceso directo en el escritorio"; GroupDescription: "Tareas adicionales:"; Flags: unchecked
+          [Files]
+          Source: "$deploy\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+          [Icons]
+          Name: "{group}\LoginElecciones"; Filename: "{app}\{#MyAppExeName}"
+          Name: "{autodesktop}\LoginElecciones"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+          [Run]
+          Filename: "{app}\{#MyAppExeName}"; Description: "Iniciar LoginElecciones"; Flags: postinstall nowait skipifsilent
+          "@
+          $issPath = Join-Path $env:GITHUB_WORKSPACE 'dist\LoginElecciones.iss'
+          Set-Content -Path $issPath -Value $iss -Encoding utf8
+          & $iscc $issPath
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup falló (código $LASTEXITCODE)." }
+          if (-not (Test-Path (Join-Path $env:GITHUB_WORKSPACE 'dist\installer\LoginElecciones-Windows-Setup.exe'))) {
+            throw 'No se generó el instalador esperado.'
+          }
+
+      - name: Publicar ZIP e instalador en GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: |
+            dist/LoginElecciones-Windows.zip
+            dist/installer/LoginElecciones-Windows-Setup.exe
+          fail_on_unmatched_files: true
