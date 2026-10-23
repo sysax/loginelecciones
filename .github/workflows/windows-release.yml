@@ -47,6 +47,20 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel
 
+      # Qt 6 NO incluye libpq.dll: se toma de los binarios oficiales
+      # de PostgreSQL (URL directa de EDB, sin login)
+      - name: Descargar binarios de PostgreSQL (fuente de libpq.dll)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://get.enterprisedb.com/postgresql/postgresql-16.6-1-windows-x64-binaries.zip'
+          Invoke-WebRequest -Uri $url -OutFile pg.zip
+          Expand-Archive -Path pg.zip -DestinationPath pgclient
+          if (-not (Test-Path 'pgclient\pgsql\bin\libpq.dll')) {
+            throw 'No se encontró libpq.dll en los binarios de PostgreSQL.'
+          }
+          Write-Host "libpq.dll descargada correctamente."
+
       - name: Desplegar DLLs de Qt (incluye sqldrivers + libpq)
         shell: pwsh
         run: |
@@ -62,17 +76,14 @@ jobs:
             throw 'windeployqt no copió qsqlpsql.dll'
           }
 
-          # windeployqt NO copia libpq.dll (no es una DLL de Qt):
-          # copiarla manualmente junto con sus dependencias (openssl, etc.)
+          # libpq.dll y sus dependencias NO vienen con Qt:
+          # copiarlas desde los binarios oficiales de PostgreSQL
+          $pgBin = Join-Path $env:GITHUB_WORKSPACE 'pgclient\pgsql\bin'
+          Copy-Item "$pgBin\libpq.dll" $dist\ -Force
+          Get-ChildItem "$pgBin\libssl-*.dll","$pgBin\libcrypto-*.dll","$pgBin\libintl-*.dll","$pgBin\libiconv-*.dll" -ErrorAction SilentlyContinue |
+            Copy-Item -Destination $dist -Force
           if (-not (Test-Path "$dist\libpq.dll")) {
-            $qtBin = Split-Path (Get-Command windeployqt).Source
-            Write-Host "Carpeta bin de Qt: $qtBin"
-            Copy-Item "$qtBin\libpq.dll" $dist\ -Force
-            Get-ChildItem "$qtBin\libssl-*.dll","$qtBin\libcrypto-*.dll","$qtBin\libintl-*.dll" -ErrorAction SilentlyContinue |
-              Copy-Item -Destination $dist -Force
-          }
-          if (-not (Test-Path "$dist\libpq.dll")) {
-            throw 'No se pudo copiar libpq.dll desde la carpeta bin de Qt.'
+            throw 'No se pudo copiar libpq.dll al paquete de distribución.'
           }
 
           Write-Host '--- Contenido de dist ---'
