@@ -1,47 +1,64 @@
-name: Compilar para Windows
-
-on:
+	name: Compilar para Windows
+	on:
   release:
     types: [created]
-
-jobs:
-  build-windows:
-    runs-on: windows-latest
-
+	permissions:
+	  contents: write
+	jobs:
+	  build-windows:
+	    runs-on: windows-latest
     steps:
-    - name: Descargar Código
-      uses: actions/checkout@v4
+	    - name: Descargar Código
+	      uses: actions/checkout@v4
+	
+	    - name: Configurar MSVC (Compilador de Windows)
+	      uses: ilammy/msvc-dev-cmd@v1
+	    - name: Instalar Qt6 mediante VCPKG
+	      shell: bash
+	      run: |
+	        # CORRECCION: el feature de vcpkg se llama "postgres", NO "postgresql".
+	        # Usar "postgresql" provocaba: error while loading vcpkg.json: invalid feature
+	        vcpkg install "qtbase[core,sql,postgres]:x64-windows" --triplet x64-windows
+	    - name: Compilar Proyecto con CMake
+	      shell: bash
+	      run: |
+	        mkdir build
+	        cd build
+	        cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake ..
+	        cmake --build . --config Release
+    - name: Copiar ejecutable a la raiz del workspace
+	      shell: bash
+	      # Con Ninja (el generador que usa msvc-dev-cmd), el exe sale en "build/"
+	      # y no en "build/Release/". Este paso normaliza la ruta para evitar
+	      # el error "no such file or directory" al subir el asset.
+	      run: |
+	        if [ -f build/Release/LoginElecciones.exe ]; then
+	          cp build/Release/LoginElecciones.exe LoginElecciones.exe
+	        elif [ -f build/LoginElecciones.exe ]; then
+	          cp build/LoginElecciones.exe LoginElecciones.exe
+	        else
+	          echo "::error::No se encontro LoginElecciones.exe despues de compilar"
+	          find . -name "*.exe" || true
+	          exit 1
+	        fi
+	    - name: Buscar herramientas de Qt y Empaquetar (Windeployqt)
+	      shell: pwsh
+	      run: |
+	        # Localizar el windeployqt instalado por vcpkg de manera dinamica
+	        $windeployqt = (Get-ChildItem -Path C:\vcpkg\packages\qtbase_* -Filter windeployqt.exe -Recurse -ErrorAction SilentlyContinue).FullName | Select-               Object         -       First 1
+	        if (-not $windeployqt) {
+	          Write-Host "::error::No se encontro windeployqt.exe en C:\vcpkg\packages"
+	          exit 1
+	        }
 
-    - name: Configurar MSVC (Compilador de Windows)
-      uses: ilammy/msvc-dev-cmd@v1
-
-    - name: Instalar Qt6 mediante VCPKG
-      run: |
-        vcpkg install qtbase[sql,postgresql]:x64-windows --triplet=x64-windows
-
-    - name: Compilar Proyecto con CMake
-      run: |
-        mkdir build
-        cd build
-        cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake ..
-        cmake --build . --config Release
-
-    - name: Buscar herramientas de Qt y Empaquetar (Windeployqt)
-      shell: pwsh
-      run: |
-        # Localizar el windeployqt instalado por vcpkg de manera dinámica
-        $windeployqt = (Get-ChildItem -Path C:\vcpkg\packages\qtbase_* -Filter windeployqt.exe -Recurse).FullName | Select-Object -First 1
-        Write-Host "Usando windeployqt desde: $windeployqt"
-        
-        cd build\Release
-        & $windeployqt --qmldir . LoginElecciones.exe
-
-    - name: Subir ejecutable al Release de GitHub
+   	        Write-Host "Usando windeployqt desde: $windeployqt"
+	        & $windeployqt --release --compiler-runtime LoginElecciones.exe
+	        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+	    - name: Subir ejecutable al Release de GitHub
       uses: svenstaro/upload-release-action@v2
-      with:
-        repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: build/Release/LoginElecciones.exe
-        asset_name: LoginElecciones-Windows.exe
-        tag: ${{ github.ref }}
-        overwrite: true
-
+	      with:
+	        repo_token: ${{ secrets.GITHUB_TOKEN }}
+	        file: LoginElecciones.exe
+	        asset_name: LoginElecciones-Windows.exe
+	        tag: ${{ github.event.release.tag_name }}
+	        overwrite: true
